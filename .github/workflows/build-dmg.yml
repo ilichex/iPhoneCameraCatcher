@@ -1,0 +1,23 @@
+name: Build macOS DMG
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build and verify disk image
+        run: ./build-dmg.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: iPhoneCameraCatcher-macOS-arm64
+          path: dist/iPhoneCameraCatcher-macOS-arm64.dmg
+          if-no-files-found: error
