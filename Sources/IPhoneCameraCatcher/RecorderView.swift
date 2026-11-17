@@ -149,6 +149,13 @@ struct RecorderView: View {
             }
             .labelsHidden()
             .accessibilityLabel("Микрофон")
+            if state.levels.count > 1 || state.audioRouting != .original {
+                Picker("Звук в файле", selection: Binding(get: { state.audioRouting }, set: model.engine.chooseAudioRouting)) {
+                    ForEach(AudioRouting.allCases) { routing in
+                        Text(routing.label).tag(routing)
+                    }
+                }
+            }
             if !state.levels.isEmpty {
                 ForEach(state.levels.indices, id: \.self) { index in
                     HStack(spacing: 8) {

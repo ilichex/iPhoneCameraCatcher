@@ -67,6 +67,7 @@ struct CaptureState: Equatable {
     var microphones: [InputChoice] = []
     var cameraID = ""
     var microphoneID = ""
+    var audioRouting: AudioRouting = .original
     var modes: [CaptureMode] = []
     var modeID = ""
     var activeMode: CaptureMode?
@@ -138,6 +139,14 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
             self.state.modeID = id
             self.applyMode(on: device)
             self.updateActiveSettings()
+            self.publish()
+        }
+    }
+
+    func chooseAudioRouting(_ routing: AudioRouting) {
+        queue.async {
+            guard self.state.phase == .idle else { return }
+            self.state.audioRouting = routing
             self.publish()
         }
     }
@@ -269,6 +278,10 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
         let micID = audio?.uniqueID ?? preferredMicrophone ?? ""
         if cameraID != state.cameraID { state.modeID = "" }
         state.cameraID = cameraID
+        if micID != state.microphoneID {
+            state.audioRouting = audio?.localizedName.localizedCaseInsensitiveContains("Scarlett") == true
+                && AudioRouting.ffmpeg != nil ? .inputOne : .original
+        }
         state.microphoneID = micID
         if force || video?.uniqueID != videoInput?.device.uniqueID || audio?.uniqueID != audioInput?.device.uniqueID {
             configure(video: video, audio: audio)
@@ -416,6 +429,19 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
             publish()
             return
         }
+        let routing = state.audioRouting
+        if routing != .original {
+            guard AudioRouting.ffmpeg != nil else {
+                state.message = "Для копирования канала нужен FFmpeg."
+                publish()
+                return
+            }
+            guard let audio = output.connection(with: .audio), audio.audioChannels.count >= routing.rawValue else {
+                state.message = "На выбранном устройстве нет входа \(routing.rawValue)."
+                publish()
+                return
+            }
+        }
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let disk = try folder.resourceValues(forKeys: [.volumeAvailableCapacityKey]).volumeAvailableCapacity
@@ -482,25 +508,42 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
         queue.async {
             guard self.recordingURL == url else { return }
             self.state.phase = .finishing
-            if let activity = self.activity { ProcessInfo.processInfo.endActivity(activity) }
-            self.activity = nil
             self.publish()
             let exists = FileManager.default.fileExists(atPath: url.path)
+            let routing = self.state.audioRouting
             Task {
+                if exists, routing != .original {
+                    do {
+                        let info = try await routing.apply(to: url)
+                        self.queue.async { self.finish(url: url, exists: true, info: info, error: error) }
+                        return
+                    } catch let routingError {
+                        let info = try? await RecordingInfo.read(url)
+                        let warning = "Звук не скопирован. Исходная запись сохранена. \(routingError.localizedDescription)"
+                        self.queue.async {
+                            self.finish(url: url, exists: true, info: info, error: error, audioWarning: warning)
+                        }
+                        return
+                    }
+                }
                 let info = try? await RecordingInfo.read(url)
                 self.queue.async { self.finish(url: url, exists: exists, info: info, error: error) }
             }
         }
     }
 
-    private func finish(url: URL, exists: Bool, info: RecordingInfo?, error: Error?) {
+    private func finish(url: URL, exists: Bool, info: RecordingInfo?, error: Error?, audioWarning: String? = nil) {
+        if let activity { ProcessInfo.processInfo.endActivity(activity) }
+        activity = nil
         let issue = interruption ?? error?.localizedDescription
         let warning: String?
         if !exists { warning = issue ?? "Файл не был создан." }
         else if info == nil { warning = issue ?? "Файл не содержит пригодной видеодорожки." }
         else if info?.audioChannels == 0 { warning = "В файле нет звуковой дорожки. " + (issue ?? "Проверь аудиовход.") }
         else { warning = issue }
-        state.result = RecordingResult(url: exists ? url : nil, info: info, warning: warning)
+        let warnings = [audioWarning, warning].compactMap { $0 }
+        state.result = RecordingResult(url: exists ? url : nil, info: info,
+                                       warning: warnings.isEmpty ? nil : warnings.joined(separator: " "))
         recordingURL = nil
         state.phase = .idle
         if refreshAfterRecording {
