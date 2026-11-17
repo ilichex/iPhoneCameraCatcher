@@ -62,6 +62,7 @@ enum FrameOrientation: String, CaseIterable, Identifiable {
 struct CaptureState: Equatable {
     var orientation: FrameOrientation = .automatic
     var rotation: CGFloat = 0
+    var centerStageEnabled: Bool?
     var cameras: [InputChoice] = []
     var microphones: [InputChoice] = []
     var cameraID = ""
@@ -136,6 +137,17 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
             guard self.state.phase == .idle, let device = self.videoInput?.device else { return }
             self.state.modeID = id
             self.applyMode(on: device)
+            self.updateActiveSettings()
+            self.publish()
+        }
+    }
+
+    func setCenterStage(_ enabled: Bool) {
+        queue.async {
+            guard self.state.phase == .idle,
+                  self.videoInput?.device.activeFormat.isCenterStageSupported == true else { return }
+            AVCaptureDevice.centerStageControlMode = .cooperative
+            AVCaptureDevice.isCenterStageEnabled = enabled
             self.updateActiveSettings()
             self.publish()
         }
@@ -342,12 +354,14 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
             && output.connection(with: .video)?.isActive == true && output.connection(with: .audio)?.isActive == true
         guard state.isPreviewing, let device = videoInput?.device else {
             state.activeMode = nil
+            state.centerStageEnabled = nil
             state.locks = [:]
             state.codecs = []
             state.activeCodec = nil
             return
         }
         let size = device.activeFormat.formatDescription.dimensions
+        state.centerStageEnabled = device.activeFormat.isCenterStageSupported ? AVCaptureDevice.isCenterStageEnabled : nil
         let interval = device.activeVideoMinFrameDuration.seconds
         let rate = interval.isFinite && interval > 0 ? 1 / interval : 0
         state.activeMode = CaptureMode(width: size.width, height: size.height, fps: rate)

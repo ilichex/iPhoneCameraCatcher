@@ -213,7 +213,14 @@ struct RecorderView: View {
                     .toggleStyle(.checkbox)
                 }
             }
-            Text("Для полного кадра отключи автоцентрирование в меню «Видео» macOS.")
+            if state.centerStageEnabled != nil {
+                Toggle("В центре внимания", isOn: Binding(
+                    get: { state.centerStageEnabled ?? false },
+                    set: model.engine.setCenterStage
+                ))
+                .toggleStyle(.checkbox)
+            }
+            Text("Если кадр тесный, отключи «В центре внимания» и проверь масштаб в меню «Видео» macOS.")
                 .font(.caption).foregroundStyle(.secondary).padding(.top, 4)
         }
     }
