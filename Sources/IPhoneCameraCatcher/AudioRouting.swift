@@ -4,11 +4,18 @@ enum AudioRouting: Int, CaseIterable, Identifiable {
     case original = 0
     case inputOne = 1
     case inputTwo = 2
+    case automatic = 3
 
     var id: Self { self }
     var label: String {
-        self == .original ? "Как записано" : "Вход \(rawValue) → левый и правый"
+        switch self {
+        case .original: "Как записано"
+        case .automatic: "Авто — исправить звук с одной стороны"
+        case .inputOne, .inputTwo: "Вход \(rawValue) → левый и правый"
+        }
     }
+
+    var requiredChannels: Int { self == .inputTwo ? 2 : 1 }
 
     static var ffmpeg: URL? {
         ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/opt/local/bin/ffmpeg"]
@@ -25,14 +32,30 @@ enum AudioRouting: Int, CaseIterable, Identifiable {
         guard tracks.count == 1, let track = tracks.first,
               let format = try await track.load(.formatDescriptions).first,
               let channels = format.audioStreamBasicDescription?.mChannelsPerFrame,
-              channels >= rawValue else {
-            throw CaptureFailure("В записанной дорожке нет доступного входа \(rawValue).")
+              channels >= requiredChannels else {
+            throw CaptureFailure("В записанной дорожке нет нужного аудиовхода.")
+        }
+
+        let original = try await RecordingInfo.read(url)
+        let input: Int
+        switch self {
+        case .original:
+            return original
+        case .automatic:
+            switch channels {
+            case 1: input = 0
+            case 2:
+                guard let active = try Self.oneSidedInput(in: url, using: executable) else { return original }
+                input = active
+            default: return original
+            }
+        case .inputOne, .inputTwo:
+            input = rawValue - 1
         }
 
         let temporary = url.deletingLastPathComponent().appendingPathComponent(".\(UUID().uuidString).mov")
         defer { try? FileManager.default.removeItem(at: temporary) }
-        let original = try await RecordingInfo.read(url)
-        let channel = "c\(rawValue - 1)"
+        let channel = "c\(input)"
         let command = Process()
         command.executableURL = executable
         command.arguments = [
@@ -57,5 +80,32 @@ enum AudioRouting: Int, CaseIterable, Identifiable {
             throw CaptureFailure("Не удалось сохранить файл с двумя каналами.")
         }
         return result
+    }
+
+    private static func oneSidedInput(in url: URL, using executable: URL) throws -> Int? {
+        let analysis = Process()
+        let report = Pipe()
+        analysis.executableURL = executable
+        analysis.arguments = [
+            "-nostdin", "-hide_banner", "-nostats", "-loglevel", "info", "-i", url.path,
+            "-map", "0:a:0", "-af", "astats=measure_perchannel=Peak_level:measure_overall=none",
+            "-f", "null", "-"
+        ]
+        analysis.standardOutput = FileHandle.nullDevice
+        analysis.standardError = report
+        try analysis.run()
+        let data = report.fileHandleForReading.readDataToEndOfFile()
+        analysis.waitUntilExit()
+        let peaks = String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline)
+            .filter { $0.contains("Peak level dB:") }
+            .compactMap { $0.split(separator: " ").last.flatMap { Double($0) } }
+        guard analysis.terminationStatus == 0, peaks.count == 2, peaks.allSatisfy({ !$0.isNaN }) else {
+            throw CaptureFailure("Не удалось определить уровень двух каналов.")
+        }
+        let louder = peaks[0] >= peaks[1] ? 0 : 1
+        let quieter = peaks[1 - louder]
+        // Тихий, но полезный сигнал сохраняем. Копируем только при большом разрыве уровней.
+        guard quieter <= -50, peaks[louder] >= -50, peaks[louder] - quieter >= 30 else { return nil }
+        return louder
     }
 }

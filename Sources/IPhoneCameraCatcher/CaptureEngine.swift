@@ -280,7 +280,7 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
         state.cameraID = cameraID
         if micID != state.microphoneID {
             state.audioRouting = audio?.localizedName.localizedCaseInsensitiveContains("Scarlett") == true
-                && AudioRouting.ffmpeg != nil ? .inputOne : .original
+                && AudioRouting.ffmpeg != nil ? .automatic : .original
         }
         state.microphoneID = micID
         if force || video?.uniqueID != videoInput?.device.uniqueID || audio?.uniqueID != audioInput?.device.uniqueID {
@@ -436,8 +436,8 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
                 publish()
                 return
             }
-            guard let audio = output.connection(with: .audio), audio.audioChannels.count >= routing.rawValue else {
-                state.message = "На выбранном устройстве нет входа \(routing.rawValue)."
+            guard let audio = output.connection(with: .audio), audio.audioChannels.count >= routing.requiredChannels else {
+                state.message = "На выбранном устройстве нет нужного аудиовхода."
                 publish()
                 return
             }

@@ -157,6 +157,8 @@ struct RecorderView: View {
                 }
             }
             if !state.levels.isEmpty {
+                Text("Уровни физических входов")
+                    .font(.caption).foregroundStyle(.secondary)
                 ForEach(state.levels.indices, id: \.self) { index in
                     HStack(spacing: 8) {
                         Text("\(index + 1)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
