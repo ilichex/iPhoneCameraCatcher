@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key><string>ru</string>
+    <key>CFBundleExecutable</key><string>IPhoneCameraCatcher</string>
+    <key>CFBundleIdentifier</key><string>local.iphone-camera-catcher</string>
+    <key>CFBundleName</key><string>iPhone Camera Catcher</string>
+    <key>CFBundleDisplayName</key><string>iPhone Camera Catcher</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>0.1.0</string>
+    <key>CFBundleVersion</key><string>1</string>
+    <key>LSMinimumSystemVersion</key><string>14.0</string>
+    <key>NSCameraUseContinuityCameraDeviceType</key><true/>
+    <key>NSCameraUsageDescription</key><string>Предпросмотр и запись выбранной камеры, например камеры iPhone.</string>
+    <key>NSMicrophoneUsageDescription</key><string>Запись звука с выбранного микрофона Mac или внешнего аудиоинтерфейса.</string>
+    <key>NSHighResolutionCapable</key><true/>
+</dict>
+</plist>
