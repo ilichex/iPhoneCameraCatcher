@@ -34,7 +34,10 @@ struct RecordingInfo: Equatable {
         guard size.width > 0, size.height > 0, duration.isFinite, duration > 0 else {
             throw CaptureFailure("В файле нет пригодных для просмотра кадров.")
         }
-        return Self(width: size.width, height: size.height, fps: rate.isFinite ? Double(rate) : 0,
+        let transform = try await video.load(.preferredTransform)
+        let displayed = CGRect(x: 0, y: 0, width: Int(size.width), height: Int(size.height))
+            .applying(transform).standardized.size
+        return Self(width: Int32(displayed.width.rounded()), height: Int32(displayed.height.rounded()), fps: rate.isFinite ? Double(rate) : 0,
                     codec: FileCodec.label(for: format.mediaSubType.rawValue), audioChannels: channels,
                     duration: duration)
     }

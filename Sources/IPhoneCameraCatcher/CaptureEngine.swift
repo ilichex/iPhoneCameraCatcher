@@ -49,7 +49,17 @@ struct RecordingResult: Equatable {
     let warning: String?
 }
 
+enum FrameOrientation: String, CaseIterable, Identifiable {
+    case portrait = "Вертикально"
+    case portraitFlipped = "Вертикально, поворот в другую сторону"
+    case landscape = "Горизонтально"
+
+    var id: Self { self }
+}
+
 struct CaptureState: Equatable {
+    var orientation: FrameOrientation = .portrait
+    var rotation: CGFloat = 0
     var cameras: [InputChoice] = []
     var microphones: [InputChoice] = []
     var cameraID = ""
@@ -123,6 +133,18 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
             guard self.state.phase == .idle, let device = self.videoInput?.device else { return }
             self.state.modeID = id
             self.applyMode(on: device)
+            self.updateActiveSettings()
+            self.publish()
+        }
+    }
+
+    func chooseOrientation(_ orientation: FrameOrientation) {
+        queue.async {
+            guard self.state.phase == .idle else { return }
+            self.state.orientation = orientation
+            if let device = self.videoInput?.device {
+                self.applyMode(on: device)
+            }
             self.updateActiveSettings()
             self.publish()
         }
@@ -303,7 +325,15 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
     }
 
     private func applyMode(on device: AVCaptureDevice) {
-        let candidate = state.modeID.isEmpty ? candidates.first : candidates.first { $0.mode.id == state.modeID }
+        let automatic: ModeCandidate?
+        if state.orientation == .landscape {
+            automatic = candidates.first { $0.mode.width >= $0.mode.height } ?? candidates.first
+        } else {
+            automatic = candidates.first { Int64($0.mode.width) * 16 == Int64($0.mode.height) * 9 }
+                ?? candidates.first { Int64($0.mode.width) * 9 == Int64($0.mode.height) * 16 }
+                ?? candidates.first
+        }
+        let candidate = state.modeID.isEmpty ? automatic : candidates.first { $0.mode.id == state.modeID }
         guard let candidate else { return }
         do {
             try candidate.apply(to: device)
@@ -328,6 +358,13 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
         let interval = device.activeVideoMinFrameDuration.seconds
         let rate = interval.isFinite && interval > 0 ? 1 / interval : 0
         state.activeMode = CaptureMode(width: size.width, height: size.height, fps: rate)
+        if state.orientation == .landscape {
+            state.rotation = size.width < size.height ? 90 : 0
+        } else if size.width < size.height {
+            state.rotation = state.orientation == .portraitFlipped ? 180 : 0
+        } else {
+            state.rotation = state.orientation == .portraitFlipped ? 270 : 90
+        }
         state.locks = Dictionary(uniqueKeysWithValues: CameraLock.allCases.filter { $0.isSupported(on: device) }
             .map { ($0, $0.isLocked(on: device)) })
 
@@ -367,6 +404,11 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
             publish()
             return
         }
+        guard connection.isVideoRotationAngleSupported(state.rotation) else {
+            state.message = "Камера не поддерживает выбранный поворот для записи."
+            publish()
+            return
+        }
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let disk = try folder.resourceValues(forKeys: [.volumeAvailableCapacityKey]).volumeAvailableCapacity
@@ -383,6 +425,7 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
         let stamp = formatter.string(from: Date())
         let url = folder.appendingPathComponent("Запись \(stamp) \(UUID().uuidString.prefix(8)).mov")
         output.setOutputSettings(codec.settings(for: mode), for: connection)
+        connection.videoRotationAngle = state.rotation
         state.phase = .starting
         state.message = nil
         state.result = nil

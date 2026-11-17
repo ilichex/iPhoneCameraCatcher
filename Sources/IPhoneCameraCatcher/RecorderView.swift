@@ -70,7 +70,7 @@ struct RecorderView: View {
     private var preview: some View {
         ZStack {
             Color.black
-            CameraPreview(session: model.engine.session)
+            CameraPreview(session: model.engine.session, rotation: state.rotation)
                 .opacity(state.isPreviewing ? 1 : 0)
                 .accessibilityLabel("Предпросмотр камеры")
                 .accessibilityHidden(!state.isPreviewing)
@@ -169,16 +169,22 @@ struct RecorderView: View {
     private var quality: some View {
         VStack(alignment: .leading, spacing: 9) {
             section("Качество", icon: "slider.horizontal.3")
+            Picker("Ориентация кадра", selection: Binding(get: { state.orientation }, set: model.engine.chooseOrientation)) {
+                ForEach(FrameOrientation.allCases) { Text($0.rawValue).tag($0) }
+            }
             Text("Разрешение и частота").font(.caption.weight(.medium)).foregroundStyle(.secondary)
             Picker("Разрешение и частота", selection: Binding(get: { state.modeID }, set: model.engine.chooseMode)) {
-                Text("Авто — максимум камеры").tag("")
+                Text(state.orientation == .landscape ? "Авто — максимум камеры" : "Авто — приоритет 9:16").tag("")
                 ForEach(state.modes) { Text($0.label).tag($0.id) }
             }
             .labelsHidden()
             .accessibilityLabel("Разрешение и частота")
             .disabled(state.modes.isEmpty)
             if let mode = state.activeMode {
-                Text("Камера сейчас: \(mode.label)")
+                let displayed = state.rotation == 90 || state.rotation == 270
+                    ? CaptureMode(width: mode.height, height: mode.width, fps: mode.fps)
+                    : mode
+                Text("Кадр: \(displayed.label)")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Text("Кодек записи").font(.caption.weight(.medium)).foregroundStyle(.secondary)
@@ -277,6 +283,7 @@ private struct AudioMeter: View {
 
 private struct CameraPreview: NSViewRepresentable {
     let session: AVCaptureSession
+    let rotation: CGFloat
 
     func makeNSView(context: Context) -> PreviewHost {
         let view = PreviewHost()
@@ -284,7 +291,12 @@ private struct CameraPreview: NSViewRepresentable {
         return view
     }
 
-    func updateNSView(_ nsView: PreviewHost, context: Context) {}
+    func updateNSView(_ nsView: PreviewHost, context: Context) {
+        guard let connection = nsView.video.connection,
+              connection.videoRotationAngle != rotation,
+              connection.isVideoRotationAngleSupported(rotation) else { return }
+        connection.videoRotationAngle = rotation
+    }
 }
 
 private final class PreviewHost: NSView {
