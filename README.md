@@ -21,7 +21,9 @@
 
 ## Скачать и начать запись
 
-Открой [сборки на GitHub](https://github.com/ilichex/iPhoneCameraCatcher/actions/workflows/build-dmg.yml), выбери последний успешный запуск и скачай **iPhoneCameraCatcher-macOS-arm64** из раздела **Artifacts**. Распакуй архив, открой DMG и перетащи приложение в **Программы**. Сборка в GitHub рассчитана на Mac с Apple Silicon. У неё локальная подпись без нотариального заверения Apple.
+[Скачать DMG для Apple Silicon](https://github.com/ilichex/iPhoneCameraCatcher/releases/latest/download/iPhoneCameraCatcher-macOS-arm64.dmg) · [Все релизы](https://github.com/ilichex/iPhoneCameraCatcher/releases)
+
+Открой DMG и перетащи приложение в **Программы**. Сборка в GitHub рассчитана на Mac с Apple Silicon. У неё локальная подпись без нотариального заверения Apple.
 
 1. **Подключи iPhone.** Включи на нём **Камеру Непрерывности** в настройках **Основные → AirPlay и Непрерывность**. Можно подключиться по USB или без провода. При USB подтверди доверие к Mac, затем заблокируй экран. [Требования Apple](https://support.apple.com/en-us/102546)
 2. **Выбери микрофон.** Нажми **«Включить предпросмотр»**, разреши доступ к камере и микрофону. Выбери Scarlett в списке и проверь уровень, пока говоришь или играешь.
@@ -49,4 +51,4 @@
 ./build-dmg.sh
 ```
 
-DMG и приложение появятся в `dist/`. Для сборки только приложения запусти `./build.sh`. На GitHub образ собирается при пуше в `main` и при ручном запуске workflow. [Спецификация проекта](SPEC.md)
+DMG и приложение появятся в `dist/`. Для сборки только приложения запусти `./build.sh`. После пуша в `main` или ручного запуска DMG доступен в **Artifacts**. При пуше тега версии, например `v0.1.0`, GitHub публикует DMG в **Releases**. [Спецификация проекта](SPEC.md)

@@ -3,6 +3,7 @@ name: Build macOS DMG
 on:
   push:
     branches: [main]
+    tags: ['v*']
   workflow_dispatch:
 
 permissions:
@@ -23,3 +24,26 @@ jobs:
           name: iPhoneCameraCatcher-macOS-arm64
           path: dist/iPhoneCameraCatcher-macOS-arm64.dmg
           if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: iPhoneCameraCatcher-macOS-arm64
+          path: release
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            release/iPhoneCameraCatcher-macOS-arm64.dmg \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "iPhone Camera Catcher $GITHUB_REF_NAME" \
+            --notes "DMG для Mac с Apple Silicon (macOS 14 и новее). Инструкция по установке и записи есть в README."
