@@ -9,6 +9,7 @@ trap 'rm -rf -- "$staging"' EXIT
 ditto "dist/iPhone Camera Catcher.app" "$staging/iPhone Camera Catcher.app"
 ln -s /Applications "$staging/Applications"
 
-dmg="$PWD/dist/iPhoneCameraCatcher-macOS-$(uname -m).dmg"
+build_arch="${BUILD_ARCH:-$(uname -m)}"
+dmg="$PWD/dist/iPhoneCameraCatcher-macOS-$build_arch.dmg"
 hdiutil create -ov -volname "iPhone Camera Catcher" -srcfolder "$staging" -format UDZO "$dmg"
 hdiutil verify "$dmg"
