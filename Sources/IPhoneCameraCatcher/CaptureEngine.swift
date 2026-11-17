@@ -50,15 +50,17 @@ struct RecordingResult: Equatable {
 }
 
 enum FrameOrientation: String, CaseIterable, Identifiable {
-    case portrait = "Вертикально"
-    case portraitFlipped = "Вертикально, поворот в другую сторону"
-    case landscape = "Горизонтально"
+    case automatic = "Авто по камере"
+    case original = "Исходный кадр (0°)"
+    case clockwise = "Повернуть вправо (90°)"
+    case upsideDown = "Перевернуть (180°)"
+    case counterclockwise = "Повернуть влево (270°)"
 
     var id: Self { self }
 }
 
 struct CaptureState: Equatable {
-    var orientation: FrameOrientation = .portrait
+    var orientation: FrameOrientation = .automatic
     var rotation: CGFloat = 0
     var cameras: [InputChoice] = []
     var microphones: [InputChoice] = []
@@ -90,6 +92,7 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
     private var videoDiscovery: AVCaptureDevice.DiscoverySession?
     private var audioDiscovery: AVCaptureDevice.DiscoverySession?
     private var videoInput: AVCaptureDeviceInput?
+    private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
     private var audioInput: AVCaptureDeviceInput?
     private var preferredCamera: String?
     private var preferredMicrophone: String?
@@ -142,9 +145,6 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
         queue.async {
             guard self.state.phase == .idle else { return }
             self.state.orientation = orientation
-            if let device = self.videoInput?.device {
-                self.applyMode(on: device)
-            }
             self.updateActiveSettings()
             self.publish()
         }
@@ -305,6 +305,7 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
             state.message = error.localizedDescription
         }
         session.commitConfiguration()
+        rotationCoordinator = videoInput.map { .init(device: $0.device, previewLayer: nil) }
 
         if videoInput != nil || audioInput != nil { session.startRunning() }
         candidates = videoInput.map { ModeCandidate.advertised(by: $0.device) } ?? []
@@ -325,15 +326,7 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
     }
 
     private func applyMode(on device: AVCaptureDevice) {
-        let automatic: ModeCandidate?
-        if state.orientation == .landscape {
-            automatic = candidates.first { $0.mode.width >= $0.mode.height } ?? candidates.first
-        } else {
-            automatic = candidates.first { Int64($0.mode.width) * 16 == Int64($0.mode.height) * 9 }
-                ?? candidates.first { Int64($0.mode.width) * 9 == Int64($0.mode.height) * 16 }
-                ?? candidates.first
-        }
-        let candidate = state.modeID.isEmpty ? automatic : candidates.first { $0.mode.id == state.modeID }
+        let candidate = state.modeID.isEmpty ? candidates.first : candidates.first { $0.mode.id == state.modeID }
         guard let candidate else { return }
         do {
             try candidate.apply(to: device)
@@ -358,12 +351,12 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
         let interval = device.activeVideoMinFrameDuration.seconds
         let rate = interval.isFinite && interval > 0 ? 1 / interval : 0
         state.activeMode = CaptureMode(width: size.width, height: size.height, fps: rate)
-        if state.orientation == .landscape {
-            state.rotation = size.width < size.height ? 90 : 0
-        } else if size.width < size.height {
-            state.rotation = state.orientation == .portraitFlipped ? 180 : 0
-        } else {
-            state.rotation = state.orientation == .portraitFlipped ? 270 : 90
+        switch state.orientation {
+        case .automatic: state.rotation = rotationCoordinator?.videoRotationAngleForHorizonLevelCapture ?? 0
+        case .original: state.rotation = 0
+        case .clockwise: state.rotation = 90
+        case .upsideDown: state.rotation = 180
+        case .counterclockwise: state.rotation = 270
         }
         state.locks = Dictionary(uniqueKeysWithValues: CameraLock.allCases.filter { $0.isSupported(on: device) }
             .map { ($0, $0.isLocked(on: device)) })

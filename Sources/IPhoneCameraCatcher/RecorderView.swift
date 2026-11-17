@@ -172,9 +172,11 @@ struct RecorderView: View {
             Picker("Ориентация кадра", selection: Binding(get: { state.orientation }, set: model.engine.chooseOrientation)) {
                 ForEach(FrameOrientation.allCases) { Text($0.rawValue).tag($0) }
             }
+            Text("Поворот: \(Int(state.rotation))°. Если угол не меняется, выбери поворот по предпросмотру.")
+                .font(.caption).foregroundStyle(.secondary)
             Text("Разрешение и частота").font(.caption.weight(.medium)).foregroundStyle(.secondary)
             Picker("Разрешение и частота", selection: Binding(get: { state.modeID }, set: model.engine.chooseMode)) {
-                Text(state.orientation == .landscape ? "Авто — максимум камеры" : "Авто — приоритет 9:16").tag("")
+                Text("Авто — максимум камеры").tag("")
                 ForEach(state.modes) { Text($0.label).tag($0.id) }
             }
             .labelsHidden()
