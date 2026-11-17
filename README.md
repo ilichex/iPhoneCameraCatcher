@@ -5,7 +5,7 @@
 <h1 align="center">iPhone Camera Catcher</h1>
 
 <p align="center">
-  <strong>Картинка с iPhone. Звук со Scarlett. Один файл на Mac.</strong>
+  <strong>Картинка с iPhone. Звук с микрофона MacBook или аудиоинтерфейса. Один файл на Mac.</strong>
 </p>
 
 <p align="center">
