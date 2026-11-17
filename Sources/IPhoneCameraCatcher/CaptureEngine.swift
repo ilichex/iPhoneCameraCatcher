@@ -76,6 +76,10 @@ struct CaptureState: Equatable {
     var activeCodec: FileCodec?
     var locks: [CameraLock: Bool] = [:]
     var levels: [Float] = []
+    var oneSidedInput: Int?
+    var outputLevels: [Float] {
+        audioRouting.preview(inputLevels: levels, oneSidedInput: oneSidedInput)
+    }
     var isPreviewing = false
     var ready = false
     var message: String?
@@ -111,6 +115,8 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
     private var activity: NSObjectProtocol?
     private var state = CaptureState()
     private var published = CaptureState()
+    private var recentAudioPeaks: [[Double]] = []
+    private var recordingAudioPeaks: [Double] = []
     private let reserve: Int64 = 512 * 1024 * 1024
 
     func activate() { queue.async { self.activateOnQueue() } }
@@ -147,6 +153,16 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
         queue.async {
             guard self.state.phase == .idle else { return }
             self.state.audioRouting = routing
+            self.publish()
+        }
+    }
+
+    func fixOneSidedAudio() {
+        queue.async {
+            guard self.state.phase == .idle || self.state.phase == .recording,
+                  self.state.audioRouting == .original,
+                  self.state.oneSidedInput != nil, AudioRouting.ffmpeg != nil else { return }
+            self.state.audioRouting = .automatic
             self.publish()
         }
     }
@@ -313,6 +329,8 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
         state.ready = false
         state.isPreviewing = false
         state.levels = []
+        state.oneSidedInput = nil
+        recentAudioPeaks.removeAll()
         sessionInterrupted = false
         if session.isRunning { session.stopRunning() }
         session.beginConfiguration()
@@ -402,10 +420,12 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
     }
 
     private func tick() {
-        state.levels = session.isRunning ? output.connection(with: .audio)?.audioChannels.map {
+        let channels = session.isRunning ? output.connection(with: .audio)?.audioChannels ?? [] : []
+        state.levels = channels.map {
             let value = $0.averagePowerLevel
             return value.isFinite ? value : -80
-        } ?? [] : []
+        }
+        updateAudioPreview(peaks: channels.map { Double($0.peakHoldLevel) })
         if state.phase == .idle {
             updateActiveSettings()
         } else if state.phase == .recording {
@@ -413,6 +433,29 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
             if seconds.isFinite, seconds >= 0 { state.elapsed = Int(seconds) }
         }
         publish()
+    }
+
+    private func updateAudioPreview(peaks: [Double]) {
+        state.oneSidedInput = nil
+        guard peaks.count == 2, peaks.allSatisfy({ !$0.isNaN }) else {
+            recentAudioPeaks.removeAll()
+            return
+        }
+
+        if state.phase == .recording {
+            if recordingAudioPeaks.isEmpty { recordingAudioPeaks = peaks }
+            else { recordingAudioPeaks = zip(recordingAudioPeaks, peaks).map { max($0.0, $0.1) } }
+            state.oneSidedInput = AudioRouting.oneSidedInput(peaks: recordingAudioPeaks)
+        } else if state.phase == .idle {
+            // Окно в две секунды не сбрасывает предупреждение между словами.
+            recentAudioPeaks.append(peaks)
+            if recentAudioPeaks.count > 16 { recentAudioPeaks.removeFirst() }
+            guard recentAudioPeaks.count >= 4 else { return }
+            let maxima = recentAudioPeaks.reduce([-.infinity, -.infinity]) { result, sample in
+                [max(result[0], sample[0]), max(result[1], sample[1])]
+            }
+            state.oneSidedInput = AudioRouting.oneSidedInput(peaks: maxima)
+        }
     }
 
     private func startRecording(in folder: URL) {
@@ -460,6 +503,7 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
         output.setOutputSettings(codec.settings(for: mode), for: connection)
         connection.videoRotationAngle = state.rotation
         state.phase = .starting
+        recordingAudioPeaks.removeAll()
         state.message = nil
         state.result = nil
         state.elapsed = 0

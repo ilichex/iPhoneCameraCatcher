@@ -18,13 +18,17 @@ struct RecorderView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
                         sources
+                            .disabled(state.phase != .idle)
+                        audioPreview
                         Divider()
                         quality
+                            .disabled(state.phase != .idle)
                         Divider()
                         location
+                            .disabled(state.phase != .idle)
                     }
                     .padding(20)
-                    .disabled(!model.activated || state.phase != .idle)
+                    .disabled(!model.activated)
                 }
                 .frame(width: 326)
                 .background(.regularMaterial)
@@ -149,30 +153,79 @@ struct RecorderView: View {
             }
             .labelsHidden()
             .accessibilityLabel("Микрофон")
+        }
+    }
+
+    private var audioPreview: some View {
+        VStack(alignment: .leading, spacing: 9) {
             if state.levels.count > 1 || state.audioRouting != .original {
                 Picker("Звук в файле", selection: Binding(get: { state.audioRouting }, set: model.engine.chooseAudioRouting)) {
                     ForEach(AudioRouting.allCases) { routing in
                         Text(routing.label).tag(routing)
                     }
                 }
+                .disabled(state.phase != .idle)
             }
             if !state.levels.isEmpty {
-                Text("Уровни физических входов")
-                    .font(.caption).foregroundStyle(.secondary)
-                ForEach(state.levels.indices, id: \.self) { index in
-                    HStack(spacing: 8) {
-                        Text("\(index + 1)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                        AudioMeter(db: state.levels[index])
+                HStack(alignment: .top, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Вход").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                        ForEach(state.levels.indices, id: \.self) { index in
+                            meterRow("\(index + 1)", level: state.levels[index], description: "Физический вход \(index + 1)")
+                        }
                     }
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("Уровень канала \(index + 1)")
-                    .accessibilityValue("\(Int(max(-80, min(0, state.levels[index])))) дБ")
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("В файле").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                            .help("Предварительный уровень. В режиме «Авто» решение уточняется после записи.")
+                        let outputLevels = state.outputLevels
+                        if outputLevels.count == 2 {
+                            meterRow("Л", level: outputLevels[0], description: "Левый канал в файле")
+                            meterRow("П", level: outputLevels[1], description: "Правый канал в файле")
+                        }
+                    }
+                }
+                if state.oneSidedInput != nil {
+                    if state.audioRouting == .original {
+                        oneSidedWarning
+                    } else if state.audioRouting == .automatic {
+                        Label("Авто: сигнал на обе стороны", systemImage: "checkmark.circle")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             } else {
                 Text("Уровень звука появится после подключения входа.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
+    }
+
+    private var oneSidedWarning: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Звук только с одной стороны", systemImage: "exclamationmark.triangle")
+                .font(.callout.weight(.medium))
+            if AudioRouting.ffmpeg != nil {
+                Button("Исправить", action: model.engine.fixOneSidedAudio)
+                    .buttonStyle(.bordered)
+                    .disabled(state.phase != .idle && state.phase != .recording)
+            } else {
+                Text("Для исправления нужен FFmpeg.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(.orange.opacity(0.13), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func meterRow(_ label: String, level: Float, description: String) -> some View {
+        HStack(spacing: 6) {
+            Text(label).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                .frame(minWidth: 13, alignment: .leading)
+            AudioMeter(db: level)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(description)
+        .accessibilityValue("\(Int(max(-80, min(0, level)))) дБ")
     }
 
     private var quality: some View {

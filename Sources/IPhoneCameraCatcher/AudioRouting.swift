@@ -17,6 +17,29 @@ enum AudioRouting: Int, CaseIterable, Identifiable {
 
     var requiredChannels: Int { self == .inputTwo ? 2 : 1 }
 
+    func preview(inputLevels: [Float], oneSidedInput: Int?) -> [Float] {
+        guard let first = inputLevels.first else { return [] }
+        let copyInput: Int?
+        switch self {
+        case .original: copyInput = nil
+        case .automatic: copyInput = oneSidedInput
+        case .inputOne, .inputTwo: copyInput = rawValue - 1
+        }
+        if let index = copyInput, inputLevels.indices.contains(index) {
+            return [inputLevels[index], inputLevels[index]]
+        }
+        return [first, inputLevels.count > 1 ? inputLevels[1] : first]
+    }
+
+    static func oneSidedInput(peaks: [Double]) -> Int? {
+        guard peaks.count == 2 else { return nil }
+        let louder = peaks[0] >= peaks[1] ? 0 : 1
+        let quieter = peaks[1 - louder]
+        // Тихий, но полезный сигнал сохраняем. Копируем только при большом разрыве уровней.
+        guard quieter <= -50, peaks[louder] >= -50, peaks[louder] - quieter >= 30 else { return nil }
+        return louder
+    }
+
     static var ffmpeg: URL? {
         ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/opt/local/bin/ffmpeg"]
             .first(where: FileManager.default.isExecutableFile(atPath:))
@@ -102,10 +125,6 @@ enum AudioRouting: Int, CaseIterable, Identifiable {
         guard analysis.terminationStatus == 0, peaks.count == 2, peaks.allSatisfy({ !$0.isNaN }) else {
             throw CaptureFailure("Не удалось определить уровень двух каналов.")
         }
-        let louder = peaks[0] >= peaks[1] ? 0 : 1
-        let quieter = peaks[1 - louder]
-        // Тихий, но полезный сигнал сохраняем. Копируем только при большом разрыве уровней.
-        guard quieter <= -50, peaks[louder] >= -50, peaks[louder] - quieter >= 30 else { return nil }
-        return louder
+        return oneSidedInput(peaks: peaks)
     }
 }
