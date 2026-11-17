@@ -74,7 +74,8 @@ struct RecorderView: View {
     private var preview: some View {
         ZStack {
             Color.black
-            CameraPreview(session: model.engine.session, rotation: state.rotation)
+            CameraPreview(session: model.engine.session, rotation: state.rotation, selectedPoint: state.cameraPoint,
+                          onPoint: cameraPointHandler)
                 .opacity(state.isPreviewing ? 1 : 0)
                 .accessibilityLabel("Предпросмотр камеры")
                 .accessibilityHidden(!state.isPreviewing)
@@ -121,6 +122,22 @@ struct RecorderView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var cameraPointHandler: ((CGPoint) -> Void)? {
+        guard state.isPreviewing, state.phase == .idle,
+              state.canSetFocusPoint || state.canSetExposurePoint else { return nil }
+        let cameraID = state.cameraID
+        return { model.engine.setCameraPoint($0, cameraID: cameraID) }
+    }
+
+    private var cameraPointHelp: String {
+        switch (state.canSetFocusPoint, state.canSetExposurePoint) {
+        case (true, true): "Кликни по кадру, чтобы навести фокус и замерить экспозицию в этой точке."
+        case (true, false): "Кликни по кадру для фокуса. Точечный замер экспозиции недоступен."
+        case (false, true): "Кликни по кадру для замера экспозиции. Выбор точки фокуса недоступен."
+        case (false, false): "Камера не позволяет выбрать точку фокуса или экспозиции с Mac."
+        }
     }
 
     private var sources: some View {
@@ -275,6 +292,10 @@ struct RecorderView: View {
                     .toggleStyle(.checkbox)
                 }
             }
+            if state.isPreviewing {
+                Label(cameraPointHelp, systemImage: "scope")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             if state.centerStageEnabled != nil {
                 Toggle("В центре внимания", isOn: Binding(
                     get: { state.centerStageEnabled ?? false },
@@ -355,6 +376,8 @@ private struct AudioMeter: View {
 private struct CameraPreview: NSViewRepresentable {
     let session: AVCaptureSession
     let rotation: CGFloat
+    let selectedPoint: CGPoint?
+    let onPoint: ((CGPoint) -> Void)?
 
     func makeNSView(context: Context) -> PreviewHost {
         let view = PreviewHost()
@@ -363,15 +386,23 @@ private struct CameraPreview: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: PreviewHost, context: Context) {
-        guard let connection = nsView.video.connection,
-              connection.videoRotationAngle != rotation,
-              connection.isVideoRotationAngleSupported(rotation) else { return }
-        connection.videoRotationAngle = rotation
+        if let connection = nsView.video.connection, connection.videoRotationAngle != rotation,
+           connection.isVideoRotationAngleSupported(rotation) {
+            connection.videoRotationAngle = rotation
+        }
+        nsView.onPoint = onPoint
+        nsView.selectedPoint = selectedPoint
+        nsView.updatePointMarker()
     }
 }
 
 private final class PreviewHost: NSView {
     let video = AVCaptureVideoPreviewLayer()
+    var onPoint: ((CGPoint) -> Void)?
+    var selectedPoint: CGPoint?
+    private let pointMarker = CALayer()
+
+    override var isFlipped: Bool { true }
 
     override func makeBackingLayer() -> CALayer { video }
 
@@ -379,6 +410,41 @@ private final class PreviewHost: NSView {
         super.init(frame: frameRect)
         video.videoGravity = .resizeAspect
         wantsLayer = true
+        pointMarker.bounds = CGRect(x: 0, y: 0, width: 44, height: 44)
+        pointMarker.cornerRadius = 6
+        pointMarker.borderWidth = 2
+        pointMarker.borderColor = NSColor.systemYellow.cgColor
+        pointMarker.isHidden = true
+        video.addSublayer(pointMarker)
+    }
+
+    override func layout() {
+        super.layout()
+        updatePointMarker()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let onPoint, video.connection?.isActive == true else {
+            super.mouseDown(with: event)
+            return
+        }
+        let location = convert(event.locationInWindow, from: nil)
+        // Поля вокруг изображения не относятся к кадру камеры.
+        let imageRect = video.layerRectConverted(fromMetadataOutputRect: CGRect(x: 0, y: 0, width: 1, height: 1))
+        guard imageRect.contains(location) else { return }
+        onPoint(video.captureDevicePointConverted(fromLayerPoint: location))
+    }
+
+    func updatePointMarker() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if let selectedPoint, video.connection?.isActive == true {
+            pointMarker.position = video.layerPointConverted(fromCaptureDevicePoint: selectedPoint)
+            pointMarker.isHidden = false
+        } else {
+            pointMarker.isHidden = true
+        }
+        CATransaction.commit()
     }
 
     required init?(coder: NSCoder) { nil }

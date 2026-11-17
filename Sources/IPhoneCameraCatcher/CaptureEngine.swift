@@ -43,6 +43,18 @@ enum CameraLock: String, CaseIterable, Identifiable {
     }
 }
 
+private extension AVCaptureDevice {
+    var pointFocusMode: FocusMode? {
+        guard isFocusPointOfInterestSupported else { return nil }
+        return [.autoFocus, .continuousAutoFocus].first(where: isFocusModeSupported)
+    }
+
+    var pointExposureMode: ExposureMode? {
+        guard isExposurePointOfInterestSupported else { return nil }
+        return [.autoExpose, .continuousAutoExposure].first(where: isExposureModeSupported)
+    }
+}
+
 struct RecordingResult: Equatable {
     let url: URL?
     let info: RecordingInfo?
@@ -75,6 +87,9 @@ struct CaptureState: Equatable {
     var selectedCodec = FileCodec.automatic
     var activeCodec: FileCodec?
     var locks: [CameraLock: Bool] = [:]
+    var canSetFocusPoint = false
+    var canSetExposurePoint = false
+    var cameraPoint: CGPoint?
     var levels: [Float] = []
     var oneSidedInput: Int?
     var outputLevels: [Float] {
@@ -207,6 +222,34 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
         }
     }
 
+    func setCameraPoint(_ point: CGPoint, cameraID: String) {
+        queue.async {
+            guard self.state.phase == .idle, self.state.isPreviewing,
+                  let device = self.videoInput?.device, device.uniqueID == cameraID,
+                  (0...1).contains(point.x), (0...1).contains(point.y) else { return }
+            do {
+                try device.lockForConfiguration()
+                defer { device.unlockForConfiguration() }
+                let focus = device.pointFocusMode
+                let exposure = device.pointExposureMode
+                guard focus != nil || exposure != nil else { return }
+                if let focus {
+                    device.focusPointOfInterest = point
+                    device.focusMode = focus
+                }
+                if let exposure {
+                    device.exposurePointOfInterest = point
+                    device.exposureMode = exposure
+                }
+                self.state.cameraPoint = point
+            } catch {
+                self.state.message = "Не удалось задать точку камеры: \(error.localizedDescription)"
+            }
+            self.updateActiveSettings()
+            self.publish()
+        }
+    }
+
     func record(in folder: URL, processed: @escaping () -> Void) {
         queue.async {
             self.startRecording(in: folder)
@@ -328,6 +371,7 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
         state.message = nil
         state.ready = false
         state.isPreviewing = false
+        state.cameraPoint = nil
         state.levels = []
         state.oneSidedInput = nil
         recentAudioPeaks.removeAll()
@@ -373,6 +417,7 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
         guard let candidate else { return }
         do {
             try candidate.apply(to: device)
+            state.cameraPoint = nil
             if audioInput != nil { state.message = nil }
         } catch {
             state.message = "Не удалось задать режим камеры: \(error.localizedDescription)"
@@ -387,11 +432,17 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
             state.activeMode = nil
             state.centerStageEnabled = nil
             state.locks = [:]
+            state.canSetFocusPoint = false
+            state.canSetExposurePoint = false
+            state.cameraPoint = nil
             state.codecs = []
             state.activeCodec = nil
             return
         }
         let size = device.activeFormat.formatDescription.dimensions
+        state.canSetFocusPoint = device.pointFocusMode != nil
+        state.canSetExposurePoint = device.pointExposureMode != nil
+        if !state.canSetFocusPoint && !state.canSetExposurePoint { state.cameraPoint = nil }
         state.centerStageEnabled = device.activeFormat.isCenterStageSupported ? AVCaptureDevice.isCenterStageEnabled : nil
         let interval = device.activeVideoMinFrameDuration.seconds
         let rate = interval.isFinite && interval > 0 ? 1 / interval : 0
