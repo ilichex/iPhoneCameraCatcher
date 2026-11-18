@@ -9,12 +9,13 @@
     <key>CFBundleDisplayName</key><string>iPhone Camera Catcher</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
-    <key>CFBundleShortVersionString</key><string>0.1.0</string>
-    <key>CFBundleVersion</key><string>1</string>
-    <key>LSMinimumSystemVersion</key><string>14.0</string>
+    <key>CFBundleShortVersionString</key><string>0.2.0</string>
+    <key>CFBundleVersion</key><string>2</string>
+    <key>LSMinimumSystemVersion</key><string>14.2</string>
     <key>NSCameraUseContinuityCameraDeviceType</key><true/>
     <key>NSCameraUsageDescription</key><string>Предпросмотр и запись выбранной камеры, например камеры iPhone.</string>
     <key>NSMicrophoneUsageDescription</key><string>Запись звука с выбранного микрофона Mac или внешнего аудиоинтерфейса.</string>
+    <key>NSAudioCaptureUsageDescription</key><string>Запись обработанного звука Ableton и других программ с выбранного аудиовыхода вместе с видео iPhone.</string>
     <key>NSHighResolutionCapable</key><true/>
 </dict>
 </plist>

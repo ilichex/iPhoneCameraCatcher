@@ -21,6 +21,9 @@ struct RecorderView: View {
                             .disabled(state.phase != .idle)
                         audioPreview
                         Divider()
+                        systemAudio
+                            .disabled(state.phase != .idle)
+                        Divider()
                         quality
                             .disabled(state.phase != .idle)
                         Divider()
@@ -201,7 +204,7 @@ struct RecorderView: View {
                         }
                     }
                 }
-                if state.oneSidedInput != nil {
+                if state.oneSidedInput != nil && (!state.systemAudioActive || state.systemMix != .system) {
                     if state.audioRouting == .original {
                         oneSidedWarning
                     } else if state.audioRouting == .automatic {
@@ -232,6 +235,43 @@ struct RecorderView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
         .background(.orange.opacity(0.13), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var systemAudio: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            section("Системный звук", icon: "waveform.circle")
+            Picker("Источник", selection: Binding(get: { state.systemAudioID }, set: model.engine.chooseSystemAudio)) {
+                Text("Выкл").tag("")
+                if !state.systemAudioID.isEmpty,
+                   !state.systemAudioDevices.contains(where: { $0.id == state.systemAudioID }) {
+                    Text("Устройство отключено").tag(state.systemAudioID)
+                }
+                ForEach(state.systemAudioDevices) { Text($0.name).tag($0.id) }
+            }
+            .labelsHidden()
+            .accessibilityLabel("Источник системного звука")
+            Text("В Ableton выбери Scarlett как Audio Output Device, а здесь — тот же выход. Разреши запись системного звука в macOS. Эффекты попадут в файл, а наушники продолжат играть через Scarlett.")
+                .font(.caption).foregroundStyle(.secondary)
+            if state.systemAudioActive {
+                Picker("Звук в файле", selection: Binding(get: { state.systemMix }, set: model.engine.chooseSystemMix)) {
+                    ForEach(SystemMix.allCases) { Text($0.label).tag($0) }
+                }
+                .labelsHidden()
+                .accessibilityLabel("Звук в итоговом файле")
+                .help("Что оставить в готовом файле после записи.")
+                if !state.systemLevels.isEmpty {
+                    HStack(alignment: .top, spacing: 16) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Программы").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                            ForEach(state.systemLevels.indices, id: \.self) { index in
+                                meterRow("\(index + 1)", level: state.systemLevels[index],
+                                         description: "Системный звук, канал \(index + 1)")
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private func meterRow(_ label: String, level: Float, description: String) -> some View {

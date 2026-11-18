@@ -80,6 +80,11 @@ struct CaptureState: Equatable {
     var cameraID = ""
     var microphoneID = ""
     var audioRouting: AudioRouting = .original
+    var systemAudioDevices: [InputChoice] = []
+    var systemAudioID = ""
+    var systemAudioActive = false
+    var systemMix: SystemMix = .system
+    var systemLevels: [Float] = []
     var modes: [CaptureMode] = []
     var modeID = ""
     var activeMode: CaptureMode?
@@ -93,7 +98,10 @@ struct CaptureState: Equatable {
     var levels: [Float] = []
     var oneSidedInput: Int?
     var outputLevels: [Float] {
-        audioRouting.preview(inputLevels: levels, oneSidedInput: oneSidedInput)
+        if systemAudioActive, systemMix == .system {
+            return systemLevels
+        }
+        return audioRouting.preview(inputLevels: levels, oneSidedInput: oneSidedInput)
     }
     var isPreviewing = false
     var ready = false
@@ -115,6 +123,7 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
     private var videoInput: AVCaptureDeviceInput?
     private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
     private var audioInput: AVCaptureDeviceInput?
+    private var systemTap = SystemTap()
     private var preferredCamera: String?
     private var preferredMicrophone: String?
     private var candidates: [ModeCandidate] = []
@@ -123,6 +132,7 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
     private var discoveryObservers: [NSKeyValueObservation] = []
     private var timer: DispatchSourceTimer?
     private var recordingURL: URL?
+    private var systemCaptureURL: URL?
     private var interruption: String?
     private var stopAfterStart = false
     private var refreshAfterRecording = false
@@ -168,6 +178,24 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
         queue.async {
             guard self.state.phase == .idle else { return }
             self.state.audioRouting = routing
+            self.publish()
+        }
+    }
+
+    func chooseSystemAudio(_ id: String) {
+        queue.async {
+            guard self.state.phase == .idle else { return }
+            self.state.systemAudioID = id
+            UserDefaults.standard.set(id, forKey: "systemAudioDevice")
+            if !id.isEmpty, self.state.systemMix == .microphone { self.state.systemMix = .system }
+            self.discover(force: true)
+        }
+    }
+
+    func chooseSystemMix(_ mix: SystemMix) {
+        queue.async {
+            guard self.state.phase == .idle else { return }
+            self.state.systemMix = mix
             self.publish()
         }
     }
@@ -311,7 +339,9 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
             let lhs = Self.isIPhone($0), rhs = Self.isIPhone($1)
             return lhs != rhs ? lhs : $0.localizedName.localizedStandardCompare($1.localizedName) == .orderedAscending
         }
-        let microphones = audioDiscovery.devices.filter { $0.isConnected && !Self.isIPhone($0) }.sorted {
+        let microphones = audioDiscovery.devices.filter {
+            $0.isConnected && !Self.isIPhone($0) && !$0.uniqueID.hasPrefix("local.iphone-camera-catcher.")
+        }.sorted {
             let lhs = Self.isBuiltIn($0), rhs = Self.isBuiltIn($1)
             return lhs != rhs ? lhs : $0.localizedName.localizedStandardCompare($1.localizedName) == .orderedAscending
         }
@@ -342,6 +372,7 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
                 && AudioRouting.ffmpeg != nil ? .automatic : .original
         }
         state.microphoneID = micID
+        updateSystemTap(force: force)
         if force || video?.uniqueID != videoInput?.device.uniqueID || audio?.uniqueID != audioInput?.device.uniqueID {
             configure(video: video, audio: audio)
         }
@@ -367,12 +398,37 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
         UInt32(bitPattern: device.transportType) == kAudioDeviceTransportTypeBuiltIn
     }
 
+    /// Держит тап системного звука согласованным с выбором пользователя.
+    private func updateSystemTap(force: Bool = false) {
+        state.systemAudioDevices = SystemTap.outputDevices()
+        if state.systemAudioID.isEmpty, let stored = UserDefaults.standard.string(forKey: "systemAudioDevice") {
+            state.systemAudioID = state.systemAudioDevices.contains(where: { $0.id == stored }) ? stored : ""
+        }
+        let wanted = state.systemAudioID
+        if wanted == systemTap.deviceUID, !force { return }
+        if wanted.isEmpty {
+            systemTap.stop()
+            state.systemAudioActive = false
+            return
+        }
+        do {
+            _ = try systemTap.start(for: wanted)
+            state.systemAudioActive = true
+        } catch {
+            systemTap.stop()
+            state.systemAudioActive = false
+            state.message = "Системный звук отключён. \(error.localizedDescription)"
+        }
+    }
+
     private func configure(video: AVCaptureDevice?, audio: AVCaptureDevice?) {
         state.message = nil
         state.ready = false
         state.isPreviewing = false
         state.cameraPoint = nil
         state.levels = []
+        state.systemLevels = []
+        state.systemAudioActive = false
         state.oneSidedInput = nil
         recentAudioPeaks.removeAll()
         sessionInterrupted = false
@@ -384,6 +440,8 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
         do {
             if let video { videoInput = try addInput(video) }
             if let audio { audioInput = try addInput(audio) }
+            // Системный звук не входит в сессию: он пишется тапом напрямую
+            // (SystemTap.startCapture) и подмешивается на постобработке.
             if !session.outputs.contains(output) {
                 guard session.canAddOutput(output) else { throw CaptureFailure("Не удалось подключить запись .mov.") }
                 session.addOutput(output)
@@ -392,6 +450,7 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
             state.message = error.localizedDescription
         }
         session.commitConfiguration()
+        state.systemAudioActive = systemTap.aggregateUID != ""
         rotationCoordinator = videoInput.map { .init(device: $0.device, previewLayer: nil) }
 
         if videoInput != nil || audioInput != nil { session.startRunning() }
@@ -428,6 +487,9 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
         state.isPreviewing = session.isRunning && !sessionInterrupted && videoInput?.device.isConnected == true
         state.ready = state.isPreviewing && audioInput?.device.isConnected == true
             && output.connection(with: .video)?.isActive == true && output.connection(with: .audio)?.isActive == true
+        if !state.systemAudioID.isEmpty && state.systemMix != .microphone && !state.systemAudioActive {
+            state.ready = false
+        }
         guard state.isPreviewing, let device = videoInput?.device else {
             state.activeMode = nil
             state.centerStageEnabled = nil
@@ -471,12 +533,17 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
     }
 
     private func tick() {
-        let channels = session.isRunning ? output.connection(with: .audio)?.audioChannels ?? [] : []
-        state.levels = channels.map {
+        let audioConnections: [AVCaptureConnection] = session.isRunning
+            ? output.connections.filter { $0.inputPorts.contains { $0.mediaType == .audio } } : []
+        let micChannels = audioConnections.first?.audioChannels ?? []
+        state.levels = micChannels.map {
             let value = $0.averagePowerLevel
             return value.isFinite ? value : -80
         }
-        updateAudioPreview(peaks: channels.map { Double($0.peakHoldLevel) })
+        state.systemLevels = state.systemAudioActive
+            ? systemTap.drainLevels().map { $0.isFinite ? $0 : -80 }
+            : []
+        updateAudioPreview(peaks: micChannels.map { Double($0.peakHoldLevel) })
         if state.phase == .idle {
             updateActiveSettings()
         } else if state.phase == .recording {
@@ -536,6 +603,11 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
                 return
             }
         }
+        if state.systemAudioActive, state.systemMix != .microphone, AudioRouting.ffmpeg == nil {
+            state.message = "Для выбора звуковых дорожек нужен FFmpeg."
+            publish()
+            return
+        }
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let disk = try folder.resourceValues(forKeys: [.volumeAvailableCapacityKey]).volumeAvailableCapacity
@@ -561,6 +633,9 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
         recordingURL = url
         interruption = nil
         stopAfterStart = false
+        systemCaptureURL = state.systemAudioActive
+            ? url.deletingLastPathComponent().appendingPathComponent(".system-\(UUID().uuidString.prefix(8)).wav")
+            : nil
         activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .idleSystemSleepDisabled],
                                                          reason: "Запись видео")
         publish()
@@ -590,9 +665,34 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
     }
 
     func fileOutput(_ output: AVCaptureFileOutput, didStartRecordingTo url: URL, from connections: [AVCaptureConnection]) {
+        recordingStarted(at: url, startHostTime: nil)
+    }
+
+    @available(macOS 15.2, *)
+    func fileOutput(_ output: AVCaptureFileOutput, didStartRecordingTo url: URL, startPTS: CMTime,
+                    from connections: [AVCaptureConnection]) {
+        var hostTime: Double?
+        if let clock = session.synchronizationClock {
+            let converted = CMSyncConvertTime(startPTS, from: clock, to: CMClockGetHostTimeClock())
+            if converted.isNumeric, converted.seconds.isFinite { hostTime = converted.seconds }
+        }
+        recordingStarted(at: url, startHostTime: hostTime)
+    }
+
+    private func recordingStarted(at url: URL, startHostTime: Double?) {
         queue.async {
             guard self.recordingURL == url, self.state.phase == .starting else { return }
             self.state.phase = .recording
+            if let systemCaptureURL = self.systemCaptureURL {
+                do {
+                    try self.systemTap.startCapture(to: systemCaptureURL, startHostTime: startHostTime)
+                } catch {
+                    self.systemCaptureURL = nil
+                    self.state.message = "Системный звук не записан. \(error.localizedDescription)"
+                    self.interruption = self.state.message
+                    self.stopAfterStart = true
+                }
+            }
             if self.stopAfterStart { self.stopRecording() }
             self.publish()
         }
@@ -602,25 +702,50 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
                     from connections: [AVCaptureConnection], error: Error?) {
         queue.async {
             guard self.recordingURL == url else { return }
+            self.systemTap.stopCapture()
+            let systemFile = self.systemCaptureURL
+            let systemWriteError = self.systemTap.recordingError
+            self.systemCaptureURL = nil
             self.state.phase = .finishing
             self.publish()
             let exists = FileManager.default.fileExists(atPath: url.path)
             let routing = self.state.audioRouting
+            let mix = self.state.systemMix
             Task {
-                if exists, routing != .original {
+                if exists, (systemFile != nil && mix != .microphone) || routing != .original {
+                    var systemWarning: String?
+                    if let systemFile, mix != .microphone, let executable = AudioRouting.ffmpeg,
+                       let peak = AudioRouting.trackPeak(in: systemFile, stream: 0, using: executable), peak < -55 {
+                        systemWarning = "Системная дорожка пустая. Проверь, что Ableton или другой плеер играет на выбранное устройство, и что шкала «Программы» двигалась во время записи."
+                    }
                     do {
-                        let info = try await routing.apply(to: url)
-                        self.queue.async { self.finish(url: url, exists: true, info: info, error: error) }
+                        if let systemWriteError { throw CaptureFailure(systemWriteError) }
+                        if let systemWarning { throw CaptureFailure(systemWarning) }
+                        let info = try await routing.apply(to: url, mix: mix, systemFile: systemFile)
+                        if let systemFile { try? FileManager.default.removeItem(at: systemFile) }
+                        self.queue.async { self.finish(url: url, exists: true, info: info, error: error, audioWarning: systemWarning) }
                         return
                     } catch let routingError {
                         let info = try? await RecordingInfo.read(url)
-                        let warning = "Звук не скопирован. Исходная запись сохранена. \(routingError.localizedDescription)"
+                        let action = systemFile != nil ? "Дорожки не объединены" : "Звук не скопирован"
+                        var warning = "\(action). Исходная запись сохранена. \(routingError.localizedDescription)"
+                        if let systemFile {
+                            let recovery = url.deletingPathExtension().appendingPathExtension("Ableton.wav")
+                            do {
+                                try FileManager.default.moveItem(at: systemFile, to: recovery)
+                                warning += " Звук программ сохранён отдельно: \(recovery.lastPathComponent)."
+                            } catch {
+                                warning += " Временный звук оставлен в папке записи: \(systemFile.lastPathComponent)."
+                            }
+                        }
+                        if let systemWarning { warning += " " + systemWarning }
                         self.queue.async {
                             self.finish(url: url, exists: true, info: info, error: error, audioWarning: warning)
                         }
                         return
                     }
                 }
+                if let systemFile { try? FileManager.default.removeItem(at: systemFile) }
                 let info = try? await RecordingInfo.read(url)
                 self.queue.async { self.finish(url: url, exists: exists, info: info, error: error) }
             }
@@ -660,5 +785,6 @@ final class CaptureEngine: NSObject, AVCaptureFileOutputRecordingDelegate, @unch
     deinit {
         observers.forEach(NotificationCenter.default.removeObserver)
         timer?.cancel()
+        systemTap.stop()
     }
 }

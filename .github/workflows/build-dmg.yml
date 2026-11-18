@@ -46,4 +46,4 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "iPhone Camera Catcher $GITHUB_REF_NAME" \
-            --notes "DMG для Mac с Apple Silicon (macOS 14 и новее). Инструкция по установке и записи есть в README."
+            --notes "DMG для Mac с Apple Silicon (macOS 14.2 и новее). Инструкция по установке и записи есть в README."
